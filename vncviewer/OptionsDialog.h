@@ -1,4 +1,4 @@
-/* Copyright 2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
+/* Copyright 2011-2021 Pierre Ossman <ossman@cendio.se> for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,6 +30,7 @@ class Fl_Round_Button;
 class Fl_Input;
 class Fl_Int_Input;
 class Fl_Choice;
+class MonitorArrangement;
 
 typedef void (OptionsCallback)(void*);
 
@@ -53,7 +54,7 @@ protected:
   void createCompressionPage(int tx, int ty, int tw, int th);
   void createSecurityPage(int tx, int ty, int tw, int th);
   void createInputPage(int tx, int ty, int tw, int th);
-  void createScreenPage(int tx, int ty, int tw, int th);
+  void createDisplayPage(int tx, int ty, int tw, int th);
   void createMiscPage(int tx, int ty, int tw, int th);
 
   static void handleAutoselect(Fl_Widget *widget, void *data);
@@ -62,9 +63,9 @@ protected:
 
   static void handleX509(Fl_Widget *widget, void *data);
 
-  static void handleDesktopSize(Fl_Widget *widget, void *data);
-
   static void handleClipboard(Fl_Widget *widget, void *data);
+
+  static void handleFullScreenMode(Fl_Widget *widget, void *data);
 
   static void handleCancel(Fl_Widget *widget, void *data);
   static void handleOK(Fl_Widget *widget, void *data);
@@ -79,6 +80,9 @@ protected:
   Fl_Round_Button *tightButton;
   Fl_Round_Button *zrleButton;
   Fl_Round_Button *hextileButton;
+#ifdef HAVE_H264
+  Fl_Round_Button *h264Button;
+#endif
   Fl_Round_Button *rawButton;
 
   Fl_Group *colorlevelGroup;
@@ -107,7 +111,13 @@ protected:
 
   /* Input */
   Fl_Check_Button *viewOnlyCheckbox;
+  Fl_Group *mouseGroup;
   Fl_Check_Button *emulateMBCheckbox;
+  Fl_Check_Button *dotCursorCheckbox;
+  Fl_Group *keyboardGroup;
+  Fl_Check_Button *systemKeysCheckbox;
+  Fl_Choice *menuKeyChoice;
+  Fl_Group *clipboardGroup;
   Fl_Check_Button *acceptClipboardCheckbox;
 #if !defined(WIN32) && !defined(__APPLE__)
   Fl_Check_Button *setPrimaryCheckbox;
@@ -116,20 +126,22 @@ protected:
 #if !defined(WIN32) && !defined(__APPLE__)
   Fl_Check_Button *sendPrimaryCheckbox;
 #endif
-  Fl_Check_Button *systemKeysCheckbox;
-  Fl_Choice *menuKeyChoice;
 
-  /* Screen */
-  Fl_Check_Button *desktopSizeCheckbox;
-  Fl_Int_Input *desktopWidthInput;
-  Fl_Int_Input *desktopHeightInput;
-  Fl_Check_Button *remoteResizeCheckbox;
-  Fl_Check_Button *fullScreenCheckbox;
-  Fl_Check_Button *fullScreenAllMonitorsCheckbox;
+  /* Display */
+  Fl_Group *displayModeGroup;
+  Fl_Round_Button *windowedButton;
+  Fl_Round_Button *currentMonitorButton;
+  Fl_Round_Button *allMonitorsButton;
+  Fl_Round_Button *selectedMonitorsButton;
+  MonitorArrangement *monitorArrangement;
 
   /* Misc. */
   Fl_Check_Button *sharedCheckbox;
-  Fl_Check_Button *dotCursorCheckbox;
+  Fl_Check_Button *reconnectCheckbox;
+
+private:
+  static int fltk_event_handler(int event);
+  static void handleScreenConfigTimeout(void *data);
 };
 
 #endif

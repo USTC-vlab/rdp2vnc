@@ -1,4 +1,4 @@
-/* Copyright 2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
+/* Copyright 2011-2021 Pierre Ossman <ossman@cendio.se> for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,8 +20,8 @@
 #include <config.h>
 #endif
 
+#include <assert.h>
 #include <stdlib.h>
-
 #include <list>
 
 #include <rdr/types.h>
@@ -38,7 +38,9 @@
 #include "i18n.h"
 #include "menukey.h"
 #include "parameters.h"
+#include "MonitorArrangement.h"
 
+#include <FL/Fl.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
@@ -53,8 +55,10 @@ using namespace rfb;
 
 std::map<OptionsCallback*, void*> OptionsDialog::callbacks;
 
+static std::set<OptionsDialog *> instances;
+
 OptionsDialog::OptionsDialog()
-  : Fl_Window(450, 450, _("VNC Viewer: Connection Options"))
+  : Fl_Window(450, 460, _("VNC Viewer: Connection Options"))
 {
   int x, y;
   Fl_Button *button;
@@ -71,7 +75,7 @@ OptionsDialog::OptionsDialog()
     createCompressionPage(tx, ty, tw, th);
     createSecurityPage(tx, ty, tw, th);
     createInputPage(tx, ty, tw, th);
-    createScreenPage(tx, ty, tw, th);
+    createDisplayPage(tx, ty, tw, th);
     createMiscPage(tx, ty, tw, th);
   }
 
@@ -91,11 +95,19 @@ OptionsDialog::OptionsDialog()
   callback(this->handleCancel, this);
 
   set_modal();
+
+  if (instances.size() == 0)
+    Fl::add_handler(fltk_event_handler);
+  instances.insert(this);
 }
 
 
 OptionsDialog::~OptionsDialog()
 {
+  instances.erase(this);
+
+  if (instances.size() == 0)
+    Fl::remove_handler(fltk_event_handler);
 }
 
 
@@ -152,6 +164,11 @@ void OptionsDialog::loadOptions(void)
   case encodingHextile:
     hextileButton->setonly();
     break;
+#ifdef HAVE_H264
+  case encodingH264:
+    h264Button->setonly();
+    break;
+#endif
   case encodingRaw:
     rawButton->setonly();
     break;
@@ -280,29 +297,26 @@ void OptionsDialog::loadOptions(void)
     if (!strcmp(getMenuKeySymbols()[i].name, menuKeyBuf))
       menuKeyChoice->value(i + 1);
 
-  /* Screen */
-  int width, height;
-
-  if (sscanf((const char*)desktopSize, "%dx%d", &width, &height) != 2) {
-    desktopSizeCheckbox->value(false);
-    desktopWidthInput->value("1024");
-    desktopHeightInput->value("768");
+  /* Display */
+  if (!fullScreen) {
+    windowedButton->setonly();
   } else {
-    char buf[32];
-    desktopSizeCheckbox->value(true);
-    snprintf(buf, sizeof(buf), "%d", width);
-    desktopWidthInput->value(buf);
-    snprintf(buf, sizeof(buf), "%d", height);
-    desktopHeightInput->value(buf);
+    if (!strcasecmp(fullScreenMode, "all")) {
+      allMonitorsButton->setonly();
+    } else if (!strcasecmp(fullScreenMode, "selected")) {
+      selectedMonitorsButton->setonly();
+    } else {
+      currentMonitorButton->setonly();
+    }
   }
-  remoteResizeCheckbox->value(remoteResize);
-  fullScreenCheckbox->value(fullScreen);
-  fullScreenAllMonitorsCheckbox->value(fullScreenAllMonitors);
 
-  handleDesktopSize(desktopSizeCheckbox, this);
+  monitorArrangement->set(fullScreenSelectedMonitors.getParam());
+
+  handleFullScreenMode(selectedMonitorsButton, this);
 
   /* Misc. */
   sharedCheckbox->value(shared);
+  reconnectCheckbox->value(reconnectOnError);
   dotCursorCheckbox->value(dotWhenNoCursor);
 }
 
@@ -318,6 +332,10 @@ void OptionsDialog::storeOptions(void)
     preferredEncoding.setParam(encodingName(encodingZRLE));
   else if (hextileButton->value())
     preferredEncoding.setParam(encodingName(encodingHextile));
+#ifdef HAVE_H264
+  else if (h264Button->value())
+    preferredEncoding.setParam(encodingName(encodingH264));
+#endif
   else if (rawButton->value())
     preferredEncoding.setParam(encodingName(encodingRaw));
 
@@ -393,24 +411,26 @@ void OptionsDialog::storeOptions(void)
     menuKey.setParam(menuKeyChoice->text());
   }
 
-  /* Screen */
-  int width, height;
-
-  if (desktopSizeCheckbox->value() &&
-      (sscanf(desktopWidthInput->value(), "%d", &width) == 1) &&
-      (sscanf(desktopHeightInput->value(), "%d", &height) == 1)) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%dx%d", width, height);
-    desktopSize.setParam(buf);
+  /* Display */
+  if (windowedButton->value()) {
+    fullScreen.setParam(false);
   } else {
-    desktopSize.setParam("");
+    fullScreen.setParam(true);
+
+    if (allMonitorsButton->value()) {
+      fullScreenMode.setParam("All");
+    } else if (selectedMonitorsButton->value()) {
+      fullScreenMode.setParam("Selected");
+    } else {
+      fullScreenMode.setParam("Current");
+    }
   }
-  remoteResize.setParam(remoteResizeCheckbox->value());
-  fullScreen.setParam(fullScreenCheckbox->value());
-  fullScreenAllMonitors.setParam(fullScreenAllMonitorsCheckbox->value());
+
+  fullScreenSelectedMonitors.setParam(monitorArrangement->get());
 
   /* Misc. */
   shared.setParam(sharedCheckbox->value());
+  reconnectOnError.setParam(reconnectCheckbox->value());
   dotWhenNoCursor.setParam(dotCursorCheckbox->value());
 
   std::map<OptionsCallback*, void*>::const_iterator iter;
@@ -425,6 +445,7 @@ void OptionsDialog::createCompressionPage(int tx, int ty, int tw, int th)
   Fl_Group *group = new Fl_Group(tx, ty, tw, th, _("Compression"));
 
   int orig_tx, orig_ty;
+  int col1_ty, col2_ty;
   int half_width, full_width;
   int height;
 
@@ -448,7 +469,7 @@ void OptionsDialog::createCompressionPage(int tx, int ty, int tw, int th)
 
   /* VNC encoding box */
   ty += GROUP_LABEL_OFFSET;
-  height = GROUP_MARGIN * 2 + TIGHT_MARGIN * 3 + RADIO_HEIGHT * 4;
+  height = GROUP_MARGIN * 2 + TIGHT_MARGIN * 4 + RADIO_HEIGHT * 5;
   encodingGroup = new Fl_Group(tx, ty, half_width, height,
                                 _("Preferred encoding"));
   encodingGroup->box(FL_ENGRAVED_BOX);
@@ -479,6 +500,15 @@ void OptionsDialog::createCompressionPage(int tx, int ty, int tw, int th)
     hextileButton->type(FL_RADIO_BUTTON);
     ty += RADIO_HEIGHT + TIGHT_MARGIN;
 
+#ifdef HAVE_H264
+    h264Button = new Fl_Round_Button(LBLRIGHT(tx, ty,
+                                             RADIO_MIN_WIDTH,
+                                             RADIO_HEIGHT,
+                                             "H.264"));
+    h264Button->type(FL_RADIO_BUTTON);
+    ty += RADIO_HEIGHT + TIGHT_MARGIN;
+#endif
+
     rawButton = new Fl_Round_Button(LBLRIGHT(tx, ty,
                                              RADIO_MIN_WIDTH,
                                              RADIO_HEIGHT,
@@ -490,6 +520,7 @@ void OptionsDialog::createCompressionPage(int tx, int ty, int tw, int th)
   ty += GROUP_MARGIN - TIGHT_MARGIN;
 
   encodingGroup->end();
+  col1_ty = ty;
 
   /* Second column */
   tx = orig_tx + half_width + INNER_MARGIN;
@@ -538,10 +569,11 @@ void OptionsDialog::createCompressionPage(int tx, int ty, int tw, int th)
   ty += GROUP_MARGIN - TIGHT_MARGIN;
 
   colorlevelGroup->end();
+  col2_ty = ty;
 
   /* Back to normal */
   tx = orig_tx;
-  ty += INNER_MARGIN;
+  ty = (col1_ty > col2_ty ? col1_ty : col2_ty) + INNER_MARGIN;
 
   /* Checkboxes */
   compressionCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
@@ -689,8 +721,13 @@ void OptionsDialog::createInputPage(int tx, int ty, int tw, int th)
 {
   Fl_Group *group = new Fl_Group(tx, ty, tw, th, _("Input"));
 
+  int orig_tx;
+  int width;
+
   tx += OUTER_MARGIN;
   ty += OUTER_MARGIN;
+
+  width = tw - OUTER_MARGIN * 2;
 
   viewOnlyCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
                                                   CHECK_MIN_WIDTH,
@@ -698,99 +735,209 @@ void OptionsDialog::createInputPage(int tx, int ty, int tw, int th)
                                                   _("View only (ignore mouse and keyboard)")));
   ty += CHECK_HEIGHT + TIGHT_MARGIN;
 
-  emulateMBCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
-                                                   CHECK_MIN_WIDTH,
-                                                   CHECK_HEIGHT,
-                                                   _("Emulate middle mouse button")));
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
+  orig_tx = tx;
 
-  acceptClipboardCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
-                                                         CHECK_MIN_WIDTH,
-                                                         CHECK_HEIGHT,
-                                                         _("Accept clipboard from server")));
-  acceptClipboardCheckbox->callback(handleClipboard, this);
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
+  /* Mouse */
+  ty += GROUP_LABEL_OFFSET;
+  mouseGroup = new Fl_Group(tx, ty, width, 0, _("Mouse"));
+  mouseGroup->box(FL_ENGRAVED_BOX);
+  mouseGroup->align(FL_ALIGN_LEFT | FL_ALIGN_TOP);
 
-#if !defined(WIN32) && !defined(__APPLE__)
-  setPrimaryCheckbox = new Fl_Check_Button(LBLRIGHT(tx + INDENT, ty,
-                                                    CHECK_MIN_WIDTH,
-                                                    CHECK_HEIGHT,
-                                                    _("Also set primary selection")));
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
-#endif
+  /* Needed for final resize to work sanely */
+  mouseGroup->resizable(NULL);
 
-  sendClipboardCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
-                                                       CHECK_MIN_WIDTH,
-                                                       CHECK_HEIGHT,
-                                                       _("Send clipboard to server")));
-  sendClipboardCheckbox->callback(handleClipboard, this);
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
+  {
+    tx += GROUP_MARGIN;
+    ty += GROUP_MARGIN;
 
-#if !defined(WIN32) && !defined(__APPLE__)
-  sendPrimaryCheckbox = new Fl_Check_Button(LBLRIGHT(tx + INDENT, ty,
+    emulateMBCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
                                                      CHECK_MIN_WIDTH,
                                                      CHECK_HEIGHT,
-                                                     _("Send primary selection as clipboard")));
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
-#endif
+                                                     _("Emulate middle mouse button")));
+    ty += CHECK_HEIGHT + TIGHT_MARGIN;
 
-  systemKeysCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
+    dotCursorCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
                                                     CHECK_MIN_WIDTH,
                                                     CHECK_HEIGHT,
-                                                    _("Pass system keys directly to server (full screen)")));
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
+                                                    _("Show dot when no cursor")));
+    ty += CHECK_HEIGHT + TIGHT_MARGIN;
+  }
+  ty += GROUP_MARGIN - TIGHT_MARGIN;
 
-  menuKeyChoice = new Fl_Choice(LBLLEFT(tx, ty, 150, CHOICE_HEIGHT, _("Menu key")));
+  mouseGroup->end();
+  mouseGroup->size(mouseGroup->w(), ty - mouseGroup->y());
 
-  fltk_menu_add(menuKeyChoice, _("None"), 0, NULL, (void*)0, FL_MENU_DIVIDER);
-  for (int i = 0; i < getMenuKeySymbolCount(); i++)
-    fltk_menu_add(menuKeyChoice, getMenuKeySymbols()[i].name, 0, NULL, 0, 0);
+  /* Back to normal */
+  tx = orig_tx;
+  ty += INNER_MARGIN;
 
-  ty += CHOICE_HEIGHT + TIGHT_MARGIN;
+  /* Keyboard */
+  ty += GROUP_LABEL_OFFSET;
+  keyboardGroup = new Fl_Group(tx, ty, width, 0, _("Keyboard"));
+  keyboardGroup->box(FL_ENGRAVED_BOX);
+  keyboardGroup->align(FL_ALIGN_LEFT | FL_ALIGN_TOP);
+
+  /* Needed for final resize to work sanely */
+  keyboardGroup->resizable(NULL);
+
+  {
+    tx += GROUP_MARGIN;
+    ty += GROUP_MARGIN;
+
+    systemKeysCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
+                                                      CHECK_MIN_WIDTH,
+                                                      CHECK_HEIGHT,
+                                                      _("Pass system keys directly to server (full screen)")));
+    ty += CHECK_HEIGHT + TIGHT_MARGIN;
+
+    menuKeyChoice = new Fl_Choice(LBLLEFT(tx, ty, 150, CHOICE_HEIGHT, _("Menu key")));
+
+    fltk_menu_add(menuKeyChoice, _("None"), 0, NULL, (void*)0, FL_MENU_DIVIDER);
+    for (int i = 0; i < getMenuKeySymbolCount(); i++)
+      fltk_menu_add(menuKeyChoice, getMenuKeySymbols()[i].name, 0, NULL, 0, 0);
+
+    ty += CHOICE_HEIGHT + TIGHT_MARGIN;
+  }
+  ty += GROUP_MARGIN - TIGHT_MARGIN;
+
+  keyboardGroup->end();
+  keyboardGroup->size(keyboardGroup->w(), ty - keyboardGroup->y());
+
+  /* Back to normal */
+  tx = orig_tx;
+  ty += INNER_MARGIN;
+
+  /* Clipboard */
+  ty += GROUP_LABEL_OFFSET;
+  clipboardGroup = new Fl_Group(tx, ty, width, 0, _("Clipboard"));
+  clipboardGroup->box(FL_ENGRAVED_BOX);
+  clipboardGroup->align(FL_ALIGN_LEFT | FL_ALIGN_TOP);
+
+  /* Needed for final resize to work sanely */
+  clipboardGroup->resizable(NULL);
+
+  {
+    tx += GROUP_MARGIN;
+    ty += GROUP_MARGIN;
+
+    acceptClipboardCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
+                                                           CHECK_MIN_WIDTH,
+                                                           CHECK_HEIGHT,
+                                                           _("Accept clipboard from server")));
+    acceptClipboardCheckbox->callback(handleClipboard, this);
+    ty += CHECK_HEIGHT + TIGHT_MARGIN;
+
+#if !defined(WIN32) && !defined(__APPLE__)
+    setPrimaryCheckbox = new Fl_Check_Button(LBLRIGHT(tx + INDENT, ty,
+                                                      CHECK_MIN_WIDTH,
+                                                      CHECK_HEIGHT,
+                                                      _("Also set primary selection")));
+    ty += CHECK_HEIGHT + TIGHT_MARGIN;
+#endif
+
+    sendClipboardCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
+                                                         CHECK_MIN_WIDTH,
+                                                         CHECK_HEIGHT,
+                                                         _("Send clipboard to server")));
+    sendClipboardCheckbox->callback(handleClipboard, this);
+    ty += CHECK_HEIGHT + TIGHT_MARGIN;
+
+#if !defined(WIN32) && !defined(__APPLE__)
+    sendPrimaryCheckbox = new Fl_Check_Button(LBLRIGHT(tx + INDENT, ty,
+                                                       CHECK_MIN_WIDTH,
+                                                       CHECK_HEIGHT,
+                                                       _("Send primary selection as clipboard")));
+    ty += CHECK_HEIGHT + TIGHT_MARGIN;
+#endif
+  }
+  ty += GROUP_MARGIN - TIGHT_MARGIN;
+
+  clipboardGroup->end();
+  clipboardGroup->size(clipboardGroup->w(), ty - clipboardGroup->y());
+
+  /* Back to normal */
+  tx = orig_tx;
+  ty += INNER_MARGIN;
 
   group->end();
 }
 
 
-void OptionsDialog::createScreenPage(int tx, int ty, int tw, int th)
+void OptionsDialog::createDisplayPage(int tx, int ty, int tw, int th)
 {
-  int x;
+  Fl_Group *group = new Fl_Group(tx, ty, tw, th, _("Display"));
 
-  Fl_Group *group = new Fl_Group(tx, ty, tw, th, _("Screen"));
+  int orig_tx;
+  int width;
 
   tx += OUTER_MARGIN;
   ty += OUTER_MARGIN;
 
-  desktopSizeCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
-                                                     CHECK_MIN_WIDTH,
-                                                     CHECK_HEIGHT,
-                                                     _("Resize remote session on connect")));
-  desktopSizeCheckbox->callback(handleDesktopSize, this);
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
+  width = tw - OUTER_MARGIN * 2;
 
-  desktopWidthInput = new Fl_Int_Input(tx + INDENT, ty, 50, INPUT_HEIGHT);
-  x = desktopWidthInput->x() + desktopWidthInput->w() + \
-      gui_str_len("x") + 3 * 2;
-  desktopHeightInput = new Fl_Int_Input(x, ty, 50, INPUT_HEIGHT, "x");
-  ty += INPUT_HEIGHT + TIGHT_MARGIN;
+  orig_tx = tx;
 
-  remoteResizeCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
-                                                      CHECK_MIN_WIDTH,
-                                                      CHECK_HEIGHT,
-                                                      _("Resize remote session to the local window")));
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
+  /* Display mode */
+  ty += GROUP_LABEL_OFFSET;
+  displayModeGroup = new Fl_Group(tx, ty, width, 0, _("Display mode"));
+  displayModeGroup->box(FL_ENGRAVED_BOX);
+  displayModeGroup->align(FL_ALIGN_LEFT | FL_ALIGN_TOP);
 
-  fullScreenCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
-                                                  CHECK_MIN_WIDTH,
-                                                  CHECK_HEIGHT,
-                                                  _("Full-screen mode")));
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
+  /* Needed for final resize to work sanely */
+  displayModeGroup->resizable(NULL);
 
-  fullScreenAllMonitorsCheckbox = new Fl_Check_Button(LBLRIGHT(tx + INDENT, ty,
-                                                      CHECK_MIN_WIDTH,
-                                                      CHECK_HEIGHT,
-                                                      _("Enable full-screen mode over all monitors")));
-  ty += CHECK_HEIGHT + TIGHT_MARGIN;
+  {
+    tx += GROUP_MARGIN;
+    ty += GROUP_MARGIN;
+    width -= GROUP_MARGIN * 2;
+
+    windowedButton = new Fl_Round_Button(LBLRIGHT(tx, ty,
+                                                  RADIO_MIN_WIDTH,
+                                                  RADIO_HEIGHT,
+                                                  _("Windowed")));
+    windowedButton->type(FL_RADIO_BUTTON);
+    windowedButton->callback(handleFullScreenMode, this);
+    ty += RADIO_HEIGHT + TIGHT_MARGIN;
+
+    currentMonitorButton = new Fl_Round_Button(LBLRIGHT(tx, ty,
+                                                        RADIO_MIN_WIDTH,
+                                                        RADIO_HEIGHT,
+                                                        _("Full screen on current monitor")));
+    currentMonitorButton->type(FL_RADIO_BUTTON);
+    currentMonitorButton->callback(handleFullScreenMode, this);
+    ty += RADIO_HEIGHT + TIGHT_MARGIN;
+
+    allMonitorsButton = new Fl_Round_Button(LBLRIGHT(tx, ty,
+                                            RADIO_MIN_WIDTH,
+                                            RADIO_HEIGHT,
+                                            _("Full screen on all monitors")));
+    allMonitorsButton->type(FL_RADIO_BUTTON);
+    allMonitorsButton->callback(handleFullScreenMode, this);
+    ty += RADIO_HEIGHT + TIGHT_MARGIN;
+
+    selectedMonitorsButton = new Fl_Round_Button(LBLRIGHT(tx, ty,
+                                                 RADIO_MIN_WIDTH,
+                                                 RADIO_HEIGHT,
+                                                 _("Full screen on selected monitor(s)")));
+    selectedMonitorsButton->type(FL_RADIO_BUTTON);
+    selectedMonitorsButton->callback(handleFullScreenMode, this);
+    ty += RADIO_HEIGHT + TIGHT_MARGIN;
+
+    monitorArrangement = new MonitorArrangement(
+                              tx + INDENT, ty,
+                              width - INDENT, 150);
+    ty += 150 + TIGHT_MARGIN;
+  }
+  ty += GROUP_MARGIN - TIGHT_MARGIN;
+
+  displayModeGroup->end();
+  displayModeGroup->size(displayModeGroup->w(),
+                         ty - displayModeGroup->y());
+
+  /* Back to normal */
+  tx = orig_tx;
+  ty += INNER_MARGIN;
+  width = tw - OUTER_MARGIN * 2;
 
   group->end();
 }
@@ -809,10 +956,10 @@ void OptionsDialog::createMiscPage(int tx, int ty, int tw, int th)
                                                   _("Shared (don't disconnect other viewers)")));
   ty += CHECK_HEIGHT + TIGHT_MARGIN;
 
-  dotCursorCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
+  reconnectCheckbox = new Fl_Check_Button(LBLRIGHT(tx, ty,
                                                   CHECK_MIN_WIDTH,
                                                   CHECK_HEIGHT,
-                                                  _("Show dot when no cursor")));
+                                                  _("Ask to reconnect on connection errors")));
   ty += CHECK_HEIGHT + TIGHT_MARGIN;
 
   group->end();
@@ -873,19 +1020,6 @@ void OptionsDialog::handleX509(Fl_Widget *widget, void *data)
 }
 
 
-void OptionsDialog::handleDesktopSize(Fl_Widget *widget, void *data)
-{
-  OptionsDialog *dialog = (OptionsDialog*)data;
-
-  if (dialog->desktopSizeCheckbox->value()) {
-    dialog->desktopWidthInput->activate();
-    dialog->desktopHeightInput->activate();
-  } else {
-    dialog->desktopWidthInput->deactivate();
-    dialog->desktopHeightInput->deactivate();
-  }
-}
-
 void OptionsDialog::handleClipboard(Fl_Widget *widget, void *data)
 {
 #if !defined(WIN32) && !defined(__APPLE__)
@@ -900,6 +1034,17 @@ void OptionsDialog::handleClipboard(Fl_Widget *widget, void *data)
   else
     dialog->sendPrimaryCheckbox->deactivate();
 #endif
+}
+
+void OptionsDialog::handleFullScreenMode(Fl_Widget *widget, void *data)
+{
+  OptionsDialog *dialog = (OptionsDialog*)data;
+
+  if (dialog->selectedMonitorsButton->value()) {
+    dialog->monitorArrangement->activate();
+  } else {
+    dialog->monitorArrangement->deactivate();
+  }
 }
 
 void OptionsDialog::handleCancel(Fl_Widget *widget, void *data)
@@ -917,4 +1062,29 @@ void OptionsDialog::handleOK(Fl_Widget *widget, void *data)
   dialog->hide();
 
   dialog->storeOptions();
+}
+
+int OptionsDialog::fltk_event_handler(int event)
+{
+  std::set<OptionsDialog *>::iterator iter;
+
+  if (event != FL_SCREEN_CONFIGURATION_CHANGED)
+    return 0;
+
+  // Refresh monitor arrangement widget to match the parameter settings after
+  // screen configuration has changed. The MonitorArrangement index doesn't work
+  // the same way as the FLTK screen index.
+  for (iter = instances.begin(); iter != instances.end(); iter++)
+      Fl::add_timeout(0, handleScreenConfigTimeout, (*iter));
+
+  return 0;
+}
+
+void OptionsDialog::handleScreenConfigTimeout(void *data)
+{
+    OptionsDialog *self = (OptionsDialog *)data;
+
+    assert(self);
+
+    self->monitorArrangement->set(fullScreenSelectedMonitors.getParam());
 }

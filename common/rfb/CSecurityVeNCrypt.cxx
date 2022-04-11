@@ -22,6 +22,10 @@
 // CSecurityVeNCrypt
 //
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <rfb/Exception.h>
 #include <rdr/InStream.h>
 #include <rdr/OutStream.h>
@@ -55,8 +59,8 @@ CSecurityVeNCrypt::CSecurityVeNCrypt(CConnection* cc, SecurityClient* sec)
 
 CSecurityVeNCrypt::~CSecurityVeNCrypt()
 {
-  if (availableTypes)
-	delete[] availableTypes;
+  delete[] availableTypes;
+  delete csecurity;
 }
 
 bool CSecurityVeNCrypt::processMsg()

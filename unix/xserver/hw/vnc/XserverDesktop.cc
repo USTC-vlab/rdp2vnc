@@ -21,6 +21,10 @@
 // XserverDesktop.cxx
 //
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <assert.h>
 #include <signal.h>
 #include <stdio.h>
@@ -46,7 +50,7 @@
 #include "vncHooks.h"
 #include "vncSelection.h"
 #include "XorgGlue.h"
-#include "Input.h"
+#include "vncInput.h"
 
 extern "C" {
 void vncSetGlueContext(int screenIndex);
@@ -72,7 +76,7 @@ XserverDesktop::XserverDesktop(int screenIndex_,
                                std::list<network::SocketListener*> listeners_,
                                const char* name, const rfb::PixelFormat &pf,
                                int width, int height,
-                               void* fbptr, int stride)
+                               void* fbptr, int stride_)
   : screenIndex(screenIndex_),
     server(0), listeners(listeners_),
     shadowFramebuffer(NULL),
@@ -81,7 +85,7 @@ XserverDesktop::XserverDesktop(int screenIndex_,
   format = pf;
 
   server = new VNCServerST(name, this);
-  setFramebuffer(width, height, fbptr, stride);
+  setFramebuffer(width, height, fbptr, stride_);
 
   for (std::list<SocketListener*>::iterator i = listeners.begin();
        i != listeners.end();
@@ -196,10 +200,10 @@ void XserverDesktop::announceClipboard(bool available)
   }
 }
 
-void XserverDesktop::sendClipboardData(const char* data)
+void XserverDesktop::sendClipboardData(const char* data_)
 {
   try {
-    server->sendClipboardData(data);
+    server->sendClipboardData(data_);
   } catch (rdr::Exception& e) {
     vlog.error("XserverDesktop::sendClipboardData: %s",e.str());
   }
@@ -462,12 +466,6 @@ unsigned int XserverDesktop::setScreenLayout(int fb_width, int fb_height,
 {
   unsigned int result;
 
-  char buffer[2048];
-  vlog.debug("Got request for framebuffer resize to %dx%d",
-             fb_width, fb_height);
-  layout.print(buffer, sizeof(buffer));
-  vlog.debug("%s", buffer);
-
   vncSetGlueContext(screenIndex);
   result = ::setScreenLayout(fb_width, fb_height, layout, &outputIdMap);
 
@@ -503,11 +501,11 @@ void XserverDesktop::grabRegion(const rfb::Region& region)
   region.get_rects(&rects);
   for (i = rects.begin(); i != rects.end(); i++) {
     rdr::U8 *buffer;
-    int stride;
+    int bufStride;
 
-    buffer = getBufferRW(*i, &stride);
+    buffer = getBufferRW(*i, &bufStride);
     vncGetScreenImage(screenIndex, i->tl.x, i->tl.y, i->width(), i->height(),
-                      (char*)buffer, stride * format.bpp/8);
+                      (char*)buffer, bufStride * format.bpp/8);
     commitBufferRW(*i);
   }
 }

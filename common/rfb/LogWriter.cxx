@@ -18,6 +18,10 @@
 
 // -=- LogWriter.cxx - client-side logging interface
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <string.h>
 
 #include <rfb/LogWriter.h>
@@ -126,9 +130,4 @@ bool LogParameter::setParam(const char* v) {
       return false;
   }
   return true;
-}
-
-void LogParameter::setDefault(const char* d) {
-  def_value = d;
-  setParam(def_value);
 }

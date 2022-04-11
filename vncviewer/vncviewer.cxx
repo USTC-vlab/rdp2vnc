@@ -22,6 +22,7 @@
 #include <config.h>
 #endif
 
+#include <assert.h>
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -39,20 +40,23 @@
 #define mkdir(path, mode) _mkdir(path)
 #endif
 
+#ifdef __APPLE__
+#include <Carbon/Carbon.h>
+#endif
+
 #if !defined(WIN32) && !defined(__APPLE__)
 #include <X11/Xlib.h>
 #include <X11/XKBlib.h>
 #endif
 
 #include <rfb/Logger_stdio.h>
-#include <rfb/SecurityClient.h>
-#include <rfb/Security.h>
 #ifdef HAVE_GNUTLS
 #include <rfb/CSecurityTLS.h>
 #endif
 #include <rfb/LogWriter.h>
 #include <rfb/Timer.h>
 #include <rfb/Exception.h>
+#include <rdr/Exception.h>
 #include <network/TcpSocket.h>
 #include <os/os.h>
 
@@ -77,7 +81,7 @@
 #include "win32.h"
 #endif
 
-rfb::LogWriter vlog("main");
+static rfb::LogWriter vlog("main");
 
 using namespace network;
 using namespace rfb;
@@ -89,7 +93,8 @@ static const char *argv0 = NULL;
 
 static bool inMainloop = false;
 static bool exitMainloop = false;
-static const char *exitError = NULL;
+static char *exitError = NULL;
+static bool fatalError = false;
 
 static const char *about_text()
 {
@@ -99,27 +104,28 @@ static const char *about_text()
   // encodings, so we need to make sure we get a fresh string every
   // time.
   snprintf(buffer, sizeof(buffer),
-           _("TigerVNC Viewer %d-bit v%s\n"
+           _("TigerVNC Viewer v%s\n"
              "Built on: %s\n"
              "Copyright (C) 1999-%d TigerVNC Team and many others (see README.rst)\n"
              "See https://www.tigervnc.org for information on TigerVNC."),
-           (int)sizeof(size_t)*8, PACKAGE_VERSION,
-           BUILD_TIMESTAMP, 2021);
+           PACKAGE_VERSION, BUILD_TIMESTAMP, 2022);
 
   return buffer;
 }
 
-void exit_vncviewer(const char *error, ...)
+
+void abort_vncviewer(const char *error, ...)
 {
+  fatalError = true;
+
   // Prioritise the first error we get as that is probably the most
   // relevant one.
-  if ((error != NULL) && (exitError == NULL)) {
+  if (exitError == NULL) {
     va_list ap;
 
     va_start(ap, error);
     exitError = (char*)malloc(1024);
-    if (exitError)
-      (void) vsnprintf((char*)exitError, 1024, error, ap);
+    vsnprintf(exitError, 1024, error, ap);
     va_end(ap);
   }
 
@@ -133,7 +139,35 @@ void exit_vncviewer(const char *error, ...)
   }
 }
 
-bool should_exit()
+void abort_connection(const char *error, ...)
+{
+  assert(inMainloop);
+
+  // Prioritise the first error we get as that is probably the most
+  // relevant one.
+  if (exitError == NULL) {
+    va_list ap;
+
+    va_start(ap, error);
+    exitError = (char*)malloc(1024);
+    vsnprintf(exitError, 1024, error, ap);
+    va_end(ap);
+  }
+
+  exitMainloop = true;
+}
+
+void abort_connection_with_unexpected_error(const rdr::Exception &e) {
+  abort_connection(_("An unexpected error occurred when communicating "
+                     "with the server:\n\n%s"), e.str());
+}
+
+void disconnect()
+{
+  exitMainloop = true;
+}
+
+bool should_disconnect()
 {
   return exitMainloop;
 }
@@ -144,17 +178,57 @@ void about_vncviewer()
   fl_message("%s", about_text());
 }
 
-void run_mainloop()
+static void mainloop(const char* vncserver, network::Socket* sock)
 {
-  int next_timer;
+  while (true) {
+    CConn *cc;
 
-  next_timer = Timer::checkTimeouts();
-  if (next_timer == 0)
-    next_timer = INT_MAX;
+    exitMainloop = false;
 
-  if (Fl::wait((double)next_timer / 1000.0) < 0.0) {
-    vlog.error(_("Internal FLTK error. Exiting."));
-    exit(-1);
+    cc = new CConn(vncServerName, sock);
+
+    while (!exitMainloop) {
+      int next_timer;
+
+      next_timer = Timer::checkTimeouts();
+      if (next_timer == 0)
+        next_timer = INT_MAX;
+
+      if (Fl::wait((double)next_timer / 1000.0) < 0.0) {
+        vlog.error(_("Internal FLTK error. Exiting."));
+        exit(-1);
+      }
+    }
+
+    delete cc;
+
+    if (fatalError) {
+      assert(exitError != NULL);
+      if (alertOnFatalError)
+        fl_alert("%s", exitError);
+      break;
+    }
+
+    if (exitError == NULL)
+      break;
+
+    if(reconnectOnError && (sock == NULL)) {
+      int ret;
+      ret = fl_choice(_("%s\n\n"
+                        "Attempt to reconnect?"),
+                      NULL, fl_yes, fl_no, exitError);
+      free(exitError);
+      exitError = NULL;
+      if (ret == 1)
+        continue;
+      else
+        break;
+    }
+
+    if (alertOnFatalError)
+      fl_alert("%s", exitError);
+
+    break;
   }
 }
 
@@ -196,6 +270,57 @@ static void CleanupSignalHandler(int sig)
   exit(1);
 }
 
+static const char* getlocaledir()
+{
+#if defined(WIN32)
+  static char localebuf[PATH_MAX];
+  char *slash;
+
+  GetModuleFileName(NULL, localebuf, sizeof(localebuf));
+
+  slash = strrchr(localebuf, '\\');
+  if (slash == NULL)
+    return NULL;
+
+  *slash = '\0';
+
+  if ((strlen(localebuf) + strlen("\\locale")) >= sizeof(localebuf))
+    return NULL;
+
+  strcat(localebuf, "\\locale");
+
+  return localebuf;
+#elif defined(__APPLE__)
+  CFBundleRef bundle;
+  CFURLRef localeurl;
+  CFStringRef localestr;
+  Boolean ret;
+
+  static char localebuf[PATH_MAX];
+
+  bundle = CFBundleGetMainBundle();
+  if (bundle == NULL)
+    return NULL;
+
+  localeurl = CFBundleCopyResourceURL(bundle, CFSTR("locale"),
+                                      NULL, NULL);
+  if (localeurl == NULL)
+    return NULL;
+
+  localestr = CFURLCopyFileSystemPath(localeurl, kCFURLPOSIXPathStyle);
+
+  CFRelease(localeurl);
+
+  ret = CFStringGetCString(localestr, localebuf, sizeof(localebuf),
+                           kCFStringEncodingUTF8);
+  if (!ret)
+    return NULL;
+
+  return localebuf;
+#else
+  return CMAKE_INSTALL_FULL_LOCALEDIR;
+#endif
+}
 static void init_fltk()
 {
   // Basic text size (10pt @ 96 dpi => 13px)
@@ -337,12 +462,11 @@ static void mkvnchomedir()
   char* homeDir = NULL;
 
   if (getvnchomedir(&homeDir) == -1) {
-    vlog.error(_("Could not create VNC home directory: can't obtain home "
-                 "directory path."));
+    vlog.error(_("Could not obtain the home directory path"));
   } else {
     int result = mkdir(homeDir, 0755);
     if (result == -1 && errno != EEXIST)
-      vlog.error(_("Could not create VNC home directory: %s."), strerror(errno));
+      vlog.error(_("Could not create VNC home directory: %s"), strerror(errno));
     delete [] homeDir;
   }
 }
@@ -431,9 +555,19 @@ potentiallyLoadConfigurationFile(char *vncServerName)
       vncServerName[VNCSERVERNAMELEN-1] = '\0';
     } catch (rfb::Exception& e) {
       vlog.error("%s", e.str());
-      exit_vncviewer(_("Error reading configuration file \"%s\":\n\n%s"),
-                     vncServerName, e.str());
+      abort_vncviewer(_("Unable to load the specified configuration "
+                        "file:\n\n%s"), e.str());
     }
+  }
+}
+
+static void
+migrateDeprecatedOptions()
+{
+  if (fullScreenAllMonitors) {
+    vlog.info(_("FullScreenAllMonitors is deprecated, set FullScreenMode to 'all' instead"));
+
+    fullScreenMode.setParam("all");
   }
 }
 
@@ -513,15 +647,19 @@ static int mktunnel()
 
 int main(int argc, char** argv)
 {
+  const char *localedir;
   UserDialog dlg;
 
   argv0 = argv[0];
 
   setlocale(LC_ALL, "");
-  bindtextdomain(PACKAGE_NAME, CMAKE_INSTALL_FULL_LOCALEDIR);
-  textdomain(PACKAGE_NAME);
 
-  rfb::SecurityClient::setDefaults();
+  localedir = getlocaledir();
+  if (localedir == NULL)
+    fprintf(stderr, "Failed to determine locale directory\n");
+  else
+    bindtextdomain(PACKAGE_NAME, localedir);
+  textdomain(PACKAGE_NAME);
 
   // Write about text to console, still using normal locale codeset
   fprintf(stderr,"\n%s\n", about_text());
@@ -617,6 +755,8 @@ int main(int argc, char** argv)
   // Check if the server name in reality is a configuration file
   potentiallyLoadConfigurationFile(vncServerName);
 
+  migrateDeprecatedOptions();
+
   mkvnchomedir();
 
   CSecurity::upg = &dlg;
@@ -632,7 +772,7 @@ int main(int argc, char** argv)
     // TRANSLATORS: "Parameters" are command line arguments, or settings
     // from a file or the Windows registry.
     vlog.error(_("Parameters -listen and -via are incompatible"));
-    exit_vncviewer(_("Parameters -listen and -via are incompatible"));
+    abort_vncviewer(_("Parameters -listen and -via are incompatible"));
     return 1; /* Not reached */
   }
 #endif
@@ -679,7 +819,7 @@ int main(int argc, char** argv)
       }
     } catch (rdr::Exception& e) {
       vlog.error("%s", e.str());
-      exit_vncviewer(_("Failure waiting for incoming VNC connection:\n\n%s"), e.str());
+      abort_vncviewer(_("Failure waiting for incoming VNC connection:\n\n%s"), e.str());
       return 1; /* Not reached */
     }
 
@@ -700,17 +840,9 @@ int main(int argc, char** argv)
 #endif
   }
 
-  CConn *cc = new CConn(vncServerName, sock);
-
   inMainloop = true;
-  while (!exitMainloop)
-    run_mainloop();
+  mainloop(vncServerName, sock);
   inMainloop = false;
-
-  delete cc;
-
-  if (exitError != NULL && alertOnFatalError)
-    fl_alert("%s", exitError);
 
   return 0;
 }

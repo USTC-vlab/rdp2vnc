@@ -16,6 +16,10 @@
  * USA.
  */
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <assert.h>
 #include <string.h>
 
@@ -43,6 +47,8 @@ DecodeManager::DecodeManager(CConnection *conn) :
 
   memset(decoders, 0, sizeof(decoders));
 
+  memset(stats, 0, sizeof(stats));
+
   queueMutex = new os::Mutex();
   producerCond = new os::Condition(queueMutex);
   consumerCond = new os::Condition(queueMutex);
@@ -57,19 +63,9 @@ DecodeManager::DecodeManager(CConnection *conn) :
     // wasting CPU fighting for locks
     if (cpuCount > 4)
       cpuCount = 4;
-    // The overhead of threading is small, but not small enough to
-    // ignore on single CPU systems
-    if (cpuCount == 1)
-      vlog.info("Decoding data on main thread");
-    else
-      vlog.info("Creating %d decoder thread(s)", (int)cpuCount);
   }
 
-  if (cpuCount == 1) {
-    // Threads are not used on single CPU machines
-    freeBuffers.push_back(new rdr::MemOutStream());
-    return;
-  }
+  vlog.info("Creating %d decoder thread(s)", (int)cpuCount);
 
   while (cpuCount--) {
     // Twice as many possible entries in the queue as there
@@ -83,6 +79,8 @@ DecodeManager::DecodeManager(CConnection *conn) :
 
 DecodeManager::~DecodeManager()
 {
+  logStats();
+
   while (!threads.empty()) {
     delete threads.back();
     threads.pop_back();
@@ -108,6 +106,7 @@ bool DecodeManager::decodeRect(const Rect& r, int encoding,
 {
   Decoder *decoder;
   rdr::MemOutStream *bufferStream;
+  int equiv;
 
   QueueEntry *entry;
 
@@ -128,22 +127,6 @@ bool DecodeManager::decodeRect(const Rect& r, int encoding,
 
   decoder = decoders[encoding];
 
-  // Fast path for single CPU machines to avoid the context
-  // switching overhead
-  if (threads.empty()) {
-    bufferStream = freeBuffers.front();
-    bufferStream->clear();
-    if (!decoder->readRect(r, conn->getInStream(), conn->server, bufferStream))
-      return false;
-    try {
-      decoder->decodeRect(r, bufferStream->data(), bufferStream->length(),
-                          conn->server, pb);
-    } catch (rdr::Exception& e) {
-      throw Exception("Error decoding rect: %s", e.str());
-    }
-    return true;
-  }
-
   // Wait for an available memory buffer
   queueMutex->lock();
 
@@ -162,8 +145,18 @@ bool DecodeManager::decodeRect(const Rect& r, int encoding,
 
   // Read the rect
   bufferStream->clear();
-  if (!decoder->readRect(r, conn->getInStream(), conn->server, bufferStream))
-    return false;
+  try {
+    if (!decoder->readRect(r, conn->getInStream(), conn->server, bufferStream))
+      return false;
+  } catch (rdr::Exception& e) {
+    throw Exception("Error reading rect: %s", e.str());
+  }
+
+  stats[encoding].rects++;
+  stats[encoding].bytes += 12 + bufferStream->length();
+  stats[encoding].pixels += r.area();
+  equiv = 12 + r.area() * (conn->server.pf().bpp/8);
+  stats[encoding].equivalent += equiv;
 
   // Then try to put it on the queue
   entry = new QueueEntry;
@@ -207,6 +200,50 @@ void DecodeManager::flush()
   queueMutex->unlock();
 
   throwThreadException();
+}
+
+void DecodeManager::logStats()
+{
+  size_t i;
+
+  unsigned rects;
+  unsigned long long pixels, bytes, equivalent;
+
+  double ratio;
+
+  char a[1024], b[1024];
+
+  rects = 0;
+  pixels = bytes = equivalent = 0;
+
+  for (i = 0;i < (sizeof(stats)/sizeof(stats[0]));i++) {
+    // Did this class do anything at all?
+    if (stats[i].rects == 0)
+      continue;
+
+    rects += stats[i].rects;
+    pixels += stats[i].pixels;
+    bytes += stats[i].bytes;
+    equivalent += stats[i].equivalent;
+
+    ratio = (double)stats[i].equivalent / stats[i].bytes;
+
+    siPrefix(stats[i].rects, "rects", a, sizeof(a));
+    siPrefix(stats[i].pixels, "pixels", b, sizeof(b));
+    vlog.info("    %s: %s, %s", encodingName(i), a, b);
+    iecPrefix(stats[i].bytes, "B", a, sizeof(a));
+    vlog.info("    %*s  %s (1:%g ratio)",
+              (int)strlen(encodingName(i)), "",
+              a, ratio);
+  }
+
+  ratio = (double)equivalent / bytes;
+
+  siPrefix(rects, "rects", a, sizeof(a));
+  siPrefix(pixels, "pixels", b, sizeof(b));
+  vlog.info("  Total: %s, %s", a, b);
+  iecPrefix(bytes, "B", a, sizeof(a));
+  vlog.info("         %s (1:%g ratio)", a, ratio);
 }
 
 void DecodeManager::setThreadException(const rdr::Exception& e)

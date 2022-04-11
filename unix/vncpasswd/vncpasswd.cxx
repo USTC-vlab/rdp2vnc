@@ -17,6 +17,11 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307,
  * USA.
  */
+
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -160,6 +165,8 @@ int main(int argc, char** argv)
     char yesno[3];
     if (fgets(yesno, 3, stdin) != NULL && (yesno[0] == 'y' || yesno[0] == 'Y')) {
       obfuscatedReadOnly = readpassword();
+    } else {
+      fprintf(stderr, "A view-only password is not used\n");
     }
 
     FILE* fp = fopen(fname,"w");

@@ -16,6 +16,11 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307,
  * USA.
  */
+
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <stdio.h>
 #include <rfb/encodings.h>
 #include <rfb/Region.h>
@@ -26,6 +31,9 @@
 #include <rfb/HextileDecoder.h>
 #include <rfb/ZRLEDecoder.h>
 #include <rfb/TightDecoder.h>
+#ifdef HAVE_H264
+#include <rfb/H264Decoder.h>
+#endif
 
 using namespace rfb;
 
@@ -61,6 +69,9 @@ bool Decoder::supported(int encoding)
   case encodingHextile:
   case encodingZRLE:
   case encodingTight:
+#ifdef HAVE_H264
+  case encodingH264:
+#endif
     return true;
   default:
     return false;
@@ -82,6 +93,10 @@ Decoder* Decoder::createDecoder(int encoding)
     return new ZRLEDecoder();
   case encodingTight:
     return new TightDecoder();
+#ifdef HAVE_H264
+  case encodingH264:
+    return new H264Decoder();
+#endif
   default:
     return NULL;
   }
