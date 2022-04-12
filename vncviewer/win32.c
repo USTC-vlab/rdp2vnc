@@ -17,7 +17,12 @@
  * USA.
  */
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <windows.h>
+#include <stdio.h>
 
 #define XK_MISCELLANY
 #define XK_XKB_KEYS

@@ -20,10 +20,6 @@
 #ifndef __RDR_TLSOUTSTREAM_H__
 #define __RDR_TLSOUTSTREAM_H__
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
 #ifdef HAVE_GNUTLS
 #include <gnutls/gnutls.h>
 #include <rdr/OutStream.h>
@@ -51,6 +47,8 @@ namespace rdr {
     size_t bufSize;
     U8* start;
     size_t offset;
+
+    Exception* saved_exception;
   };
 };
 

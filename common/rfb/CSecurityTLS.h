@@ -22,10 +22,6 @@
 #ifndef __C_SECURITY_TLS_H__
 #define __C_SECURITY_TLS_H__
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
 #ifndef HAVE_GNUTLS
 #error "This header should not be compiled without HAVE_GNUTLS defined"
 #endif
@@ -48,14 +44,13 @@ namespace rfb {
     virtual const char* description() const
       { return anon ? "TLS Encryption without VncAuth" : "X509 Encryption without VncAuth"; }
     virtual bool isSecure() const { return !anon; }
-    static void setDefaults();
 
     static StringParameter X509CA;
     static StringParameter X509CRL;
     static UserMsgBox *msg;
 
   protected:
-    void shutdown(bool needbye);
+    void shutdown();
     void freeResources();
     void setParam();
     void checkSession();

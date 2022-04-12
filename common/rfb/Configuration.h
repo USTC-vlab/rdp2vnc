@@ -243,7 +243,6 @@ namespace rfb {
     virtual bool setParam(const char* value);
     virtual char* getDefaultStr() const;
     virtual char* getValueStr() const;
-    void setDefaultStr(const char* v);
     operator const char*() const;
 
     // getData() returns a copy of the data - it must be delete[]d by the
@@ -251,7 +250,7 @@ namespace rfb {
     char* getData() const { return getValueStr(); }
   protected:
     char* value;
-    const char* def_value;
+    char* def_value;
   };
 
   class BinaryParameter : public VoidParameter {

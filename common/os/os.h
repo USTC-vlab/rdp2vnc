@@ -19,10 +19,6 @@
 #ifndef OS_OS_H
 #define OS_OS_H
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
 #include <os/w32tiger.h>
 
 /*
@@ -40,12 +36,17 @@
 int getvnchomedir(char **dirp);
 
 /*
- * Check if the file exists
+ * Get user home directory.
+ * If HOME environment variable is set then it is used.
+ * Otherwise home directory is obtained via getpwuid function.
+ *
+ * Note for Windows:
+ * This functions returns array of TCHARs, not array of chars.
  *
  * Returns:
  * 0 - Success
  * -1 - Failure
  */
-int fileexists(char *file);
+int getuserhomedir(char **dirp);
 
 #endif /* OS_OS_H */

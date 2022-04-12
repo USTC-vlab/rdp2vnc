@@ -1,6 +1,7 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright (C) 2005 Martin Koegler
  * Copyright (C) 2010 TigerVNC Team
+ * Copyright (C) 2012-2021 Pierre Ossman for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,8 +39,13 @@ ssize_t TLSInStream::pull(gnutls_transport_ptr_t str, void* data, size_t size)
   TLSInStream* self= (TLSInStream*) str;
   InStream *in = self->in;
 
+  self->streamEmpty = false;
+  delete self->saved_exception;
+  self->saved_exception = NULL;
+
   try {
     if (!in->hasData(1)) {
+      self->streamEmpty = true;
       gnutls_transport_set_errno(self->session, EAGAIN);
       return -1;
     }
@@ -50,9 +56,15 @@ ssize_t TLSInStream::pull(gnutls_transport_ptr_t str, void* data, size_t size)
     in->readBytes(data, size);
   } catch (EndOfStream&) {
     return 0;
+  } catch (SystemException &e) {
+    vlog.error("Failure reading TLS data: %s", e.str());
+    gnutls_transport_set_errno(self->session, e.err);
+    self->saved_exception = new SystemException(e);
+    return -1;
   } catch (Exception& e) {
     vlog.error("Failure reading TLS data: %s", e.str());
     gnutls_transport_set_errno(self->session, EINVAL);
+    self->saved_exception = new Exception(e);
     return -1;
   }
 
@@ -60,7 +72,7 @@ ssize_t TLSInStream::pull(gnutls_transport_ptr_t str, void* data, size_t size)
 }
 
 TLSInStream::TLSInStream(InStream* _in, gnutls_session_t _session)
-  : session(_session), in(_in)
+  : session(_session), in(_in), saved_exception(NULL)
 {
   gnutls_transport_ptr_t recv, send;
 
@@ -72,6 +84,8 @@ TLSInStream::TLSInStream(InStream* _in, gnutls_session_t _session)
 TLSInStream::~TLSInStream()
 {
   gnutls_transport_set_pull_function(session, NULL);
+
+  delete saved_exception;
 }
 
 bool TLSInStream::fillBuffer(size_t maxSize)
@@ -88,16 +102,29 @@ size_t TLSInStream::readTLS(U8* buf, size_t len)
 {
   int n;
 
-  if (gnutls_record_check_pending(session) == 0) {
-    if (!in->hasData(1))
-      return 0;
-  }
+  while (true) {
+    streamEmpty = false;
+    n = gnutls_record_recv(session, (void *) buf, len);
+    if (n == GNUTLS_E_INTERRUPTED || n == GNUTLS_E_AGAIN) {
+      // GnuTLS returns GNUTLS_E_AGAIN for a bunch of other scenarios
+      // other than the pull function returning EAGAIN, so we have to
+      // double check that the underlying stream really is empty
+      if (!streamEmpty)
+        continue;
+      else
+        return 0;
+    }
+    break;
+  };
 
-  n = gnutls_record_recv(session, (void *) buf, len);
-  if (n == GNUTLS_E_INTERRUPTED || n == GNUTLS_E_AGAIN)
-    return 0;
+  if (n == GNUTLS_E_PULL_ERROR)
+    throw *saved_exception;
 
-  if (n < 0) throw TLSException("readTLS", n);
+  if (n < 0)
+    throw TLSException("readTLS", n);
+
+  if (n == 0)
+    throw EndOfStream();
 
   return n;
 }

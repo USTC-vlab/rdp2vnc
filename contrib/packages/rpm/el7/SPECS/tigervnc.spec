@@ -1,3 +1,8 @@
+
+#defining macros needed by SELinux
+%global selinuxtype targeted
+%global modulename vncsession
+
 Name:           tigervnc
 Version:        @VERSION@
 Release:        1%{?snap:.%{snap}}%{?dist}
@@ -12,7 +17,8 @@ Source0:        %{name}-%{version}%{?snap:-%{snap}}.tar.bz2
 Source3:        10-libvnc.conf
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
-BuildRequires:  libX11-devel, automake, autoconf, libtool, gettext, gettext-autopoint
+BuildRequires:  libX11-devel, automake, autoconf, libtool
+BuildRequires:  gettext, gettext-autopoint
 BuildRequires:  libXext-devel, xorg-x11-server-source, libXi-devel
 BuildRequires:  xorg-x11-xtrans-devel, xorg-x11-util-macros, libXtst-devel
 BuildRequires:  libdrm-devel, libXt-devel, pixman-devel
@@ -21,7 +27,7 @@ BuildRequires:  mesa-libGL-devel, libXinerama-devel, ImageMagick
 BuildRequires:  freetype-devel, libXdmcp-devel, libXfont2-devel
 BuildRequires:  libXrandr-devel, fltk-devel >= 1.3.3
 BuildRequires:  libjpeg-turbo-devel, gnutls-devel, pam-devel
-BuildRequires:  systemd, cmake, selinux-policy-devel
+BuildRequires:  systemd, cmake3, selinux-policy-devel
 BuildRequires:  libpng-devel
 BuildRequires:  zlib-devel
 
@@ -121,10 +127,11 @@ This package contains icons for TigerVNC viewer
 %package selinux
 Summary:        SELinux module for TigerVNC
 BuildArch:      noarch
-Requires(pre):  libselinux-utils
-Requires(post): selinux-policy-base >= %{_selinux_policy_version}
-Requires(post): policycoreutils policycoreutils-python
-Requires(post): libselinux-utils
+BuildRequires:  selinux-policy-devel
+Requires:       selinux-policy-%{selinuxtype}
+Requires(post): selinux-policy-%{selinuxtype}
+BuildRequires:  selinux-policy-devel
+%{?selinux_requires}
 
 %description selinux
 This package provides the SELinux policy module to ensure TigerVNC
@@ -133,6 +140,11 @@ runs properly under an environment with SELinux enabled.
 %prep
 rm -rf $RPM_BUILD_ROOT
 %setup -q -n %{name}-%{version}%{?snap:-%{snap}}
+
+# There is no appstream package on CentOS 7, and hence no metainfo.its
+# that msgfmt needs to generate the metainfo XML file
+sed -i 's@add_custom_target(appstream@#\0@' vncviewer/CMakeLists.txt
+sed -i 's@install(.*metainfo.xml@#\0@' vncviewer/CMakeLists.txt
 
 cp -r /usr/share/xorg-x11-server-source/* unix/xserver
 pushd unix/xserver
@@ -154,11 +166,7 @@ export CPPFLAGS="$CXXFLAGS"
 
 export CMAKE_EXE_LINKER_FLAGS=$LDFLAGS
 
-# The cmake in RHEL is too old and doesn't set up
-# CMAKE_INSTALL_SYSCONFDIR properly
-%{cmake} -G"Unix Makefiles" \
-  -DCMAKE_INSTALL_SYSCONFDIR:PATH=%{_sysconfdir} \
-  -DBUILD_STATIC=off
+%{cmake3} -G"Unix Makefiles" -DBUILD_STATIC=off -DENABLE_H264=off
 make %{?_smp_mflags}
 
 pushd unix/xserver
@@ -234,20 +242,18 @@ if [ -x %{_bindir}/gtk-update-icon-cache ]; then
         %{_bindir}/gtk-update-icon-cache -q %{_datadir}/icons/hicolor || :
 fi
 
+
 %pre selinux
-%selinux_relabel_pre
+%selinux_relabel_pre -s %{selinuxtype}
 
 %post selinux
-%selinux_modules_install %{_datadir}/selinux/packages/vncsession.pp
-%selinux_relabel_post
-
-%posttrans selinux
-%selinux_relabel_post
+%selinux_modules_install -s %{selinuxtype} %{_datadir}/selinux/packages/%{selinuxtype}/%{modulename}.pp.bz2
+%selinux_relabel_post -s %{selinuxtype}
 
 %postun selinux
-%selinux_modules_uninstall vncsession
 if [ $1 -eq 0 ]; then
-    %selinux_relabel_post
+    %selinux_modules_uninstall -s %{selinuxtype} %{modulename}
+    %selinux_relabel_post -s %{selinuxtype}
 fi
 
 %files -f %{name}.lang
@@ -297,9 +303,13 @@ fi
 %{_datadir}/icons/hicolor/*/apps/*
 
 %files selinux
-%{_datadir}/selinux/packages/vncsession.pp
+%{_datadir}/selinux/packages/%{selinuxtype}/%{modulename}.pp.*
+%ghost %verify(not md5 size mtime) %{_sharedstatedir}/selinux/%{selinuxtype}/active/modules/200/%{modulename}
 
 %changelog
+* Tue May 18 2021 Jan Grulich <jgrulich@redhat.com> 1.11.0-1
+- SELinux package improvements
+
 * Mon Jul 27 2020 Mark Mielke <mmielke@ciena.com> 1.10.1-1
 - Update build requirements and fix unexpected rpm macro expansion.
 

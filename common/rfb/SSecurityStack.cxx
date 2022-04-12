@@ -16,6 +16,10 @@
  * USA.
  */
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <rfb/SSecurityStack.h>
 
 using namespace rfb;
@@ -28,10 +32,8 @@ SSecurityStack::SSecurityStack(SConnection* sc, int Type,
 
 SSecurityStack::~SSecurityStack()
 {
-  if (state0)
-    delete state0;
-  if (state1)
-    delete state1;
+  delete state0;
+  delete state1;
 }
 
 bool SSecurityStack::processMsg()

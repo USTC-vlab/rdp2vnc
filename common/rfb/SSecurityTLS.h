@@ -22,10 +22,6 @@
 #ifndef __S_SECURITY_TLS_H__
 #define __S_SECURITY_TLS_H__
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
 #ifndef HAVE_GNUTLS
 #error "This header should not be included without HAVE_GNUTLS defined"
 #endif
@@ -35,6 +31,13 @@
 #include <rdr/InStream.h>
 #include <rdr/OutStream.h>
 #include <gnutls/gnutls.h>
+
+/* In GnuTLS 3.6.0 DH parameter generation was deprecated. RFC7919 is used instead.
+ * GnuTLS before 3.6.0 doesn't know about RFC7919 so we will have to import it.
+ */
+#if GNUTLS_VERSION_NUMBER < 0x030600
+#define SSECURITYTLS__USE_DEPRECATED_DH
+#endif
 
 namespace rfb {
 
@@ -55,7 +58,9 @@ namespace rfb {
 
   private:
     gnutls_session_t session;
+#if defined (SSECURITYTLS__USE_DEPRECATED_DH)
     gnutls_dh_params_t dh_params;
+#endif
     gnutls_anon_server_credentials_t anon_cred;
     gnutls_certificate_credentials_t cert_cred;
     char *keyfile, *certfile;

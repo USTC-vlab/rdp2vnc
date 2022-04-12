@@ -20,10 +20,6 @@
 #ifndef __RDR_TLSINSTREAM_H__
 #define __RDR_TLSINSTREAM_H__
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
 #ifdef HAVE_GNUTLS
 
 #include <gnutls/gnutls.h>
@@ -43,6 +39,9 @@ namespace rdr {
 
     gnutls_session_t session;
     InStream* in;
+
+    bool streamEmpty;
+    Exception* saved_exception;
   };
 };
 

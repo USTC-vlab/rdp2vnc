@@ -20,6 +20,10 @@
 // VNC server configuration utility
 //
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,7 +50,7 @@
 
 using namespace rfb;
 
-LogWriter vlog("vncconfig");
+static LogWriter vlog("vncconfig");
 
 StringParameter displayname("display", "The X display", "");
 BoolParameter noWindow("nowin", "Don't display a window", 0);

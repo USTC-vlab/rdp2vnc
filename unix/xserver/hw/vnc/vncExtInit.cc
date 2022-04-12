@@ -17,8 +17,15 @@
  * USA.
  */
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <stdio.h>
 #include <errno.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <pwd.h>
 
 #include <set>
 #include <string>
@@ -73,10 +80,12 @@ struct CaseInsensitiveCompare {
 typedef std::set<std::string, CaseInsensitiveCompare> ParamSet;
 static ParamSet allowOverrideSet;
 
+static const char* defaultDesktopName();
+
 rfb::IntParameter rfbport("rfbport", "TCP port to listen for RFB protocol",0);
 rfb::StringParameter rfbunixpath("rfbunixpath", "Unix socket to listen for RFB protocol", "");
 rfb::IntParameter rfbunixmode("rfbunixmode", "Unix socket access mode", 0600);
-rfb::StringParameter desktopName("desktop", "Name of VNC desktop","x11");
+rfb::StringParameter desktopName("desktop", "Name of VNC desktop", defaultDesktopName());
 rfb::BoolParameter localhostOnly("localhost",
                                  "Only allow connections from localhost",
                                  false);
@@ -94,6 +103,31 @@ rfb::BoolParameter setPrimary("SetPrimary", "Set the PRIMARY as well "
 rfb::BoolParameter sendPrimary("SendPrimary",
                                "Send the PRIMARY as well as the CLIPBOARD selection",
                                true);
+
+static const char* defaultDesktopName()
+{
+  size_t host_max = sysconf(_SC_HOST_NAME_MAX);
+  if (host_max < 0)
+    return "";
+
+  std::vector<char> hostname(host_max + 1);
+  if (gethostname(hostname.data(), hostname.size()) == -1)
+    return "";
+
+  struct passwd* pwent = getpwuid(getuid());
+  if (pwent == NULL)
+    return "";
+
+  size_t len = snprintf(NULL, 0, "%s@%s", pwent->pw_name, hostname.data());
+  if (len < 0)
+    return "";
+
+  char* name = new char[len + 1];
+
+  snprintf(name, len + 1, "%s@%s", pwent->pw_name, hostname.data());
+
+  return name;
+}
 
 static PixelFormat vncGetPixelFormat(int scrIdx)
 {
@@ -393,8 +427,8 @@ void vncAddCopied(int scrIdx, int nRects,
   }
 }
 
-void vncSetCursor(int width, int height, int hotX, int hotY,
-                  const unsigned char *rgbaData)
+void vncSetCursorSprite(int width, int height, int hotX, int hotY,
+                        const unsigned char *rgbaData)
 {
   for (int scr = 0; scr < vncGetScreenCount(); scr++)
     desktop[scr]->setCursor(width, height, hotX, hotY, rgbaData);

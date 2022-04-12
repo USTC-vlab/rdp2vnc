@@ -111,8 +111,8 @@ CConn::CConn(const char* vncServerName, network::Socket* socket=NULL)
       }
     } catch (rdr::Exception& e) {
       vlog.error("%s", e.str());
-      exit_vncviewer(_("Failed to connect to \"%s\":\n\n%s"),
-                     vncServerName, e.str());
+      abort_connection(_("Failed to connect to \"%s\":\n\n%s"),
+                       vncServerName, e.str());
       return;
     }
   }
@@ -238,10 +238,10 @@ void CConn::socketEvent(FL_SOCKET fd, void *data)
   cc = (CConn*)data;
 
   // I don't think processMsg() is recursion safe, so add this check
-  if (recursing)
-    return;
+  assert(!recursing);
 
   recursing = true;
+  Fl::remove_fd(fd);
 
   try {
     // We might have been called to flush unwritten socket data
@@ -255,12 +255,12 @@ void CConn::socketEvent(FL_SOCKET fd, void *data)
 
       // Make sure that the FLTK handling and the timers gets some CPU
       // time in case of back to back messages
-       Fl::check();
-       Timer::checkTimeouts();
+      Fl::check();
+      Timer::checkTimeouts();
 
-       // Also check if we need to stop reading and terminate
-       if (should_exit())
-         break;
+      // Also check if we need to stop reading and terminate
+      if (should_disconnect())
+        break;
     }
 
     cc->sock->outStream().cork(false);
@@ -270,15 +270,14 @@ void CConn::socketEvent(FL_SOCKET fd, void *data)
     if (!cc->desktop) {
       vlog.error(_("The connection was dropped by the server before "
                    "the session could be established."));
-      exit_vncviewer(_("The connection was dropped by the server "
+      abort_connection(_("The connection was dropped by the server "
                        "before the session could be established."));
     } else {
-      exit_vncviewer();
+      disconnect();
     }
   } catch (rdr::Exception& e) {
     vlog.error("%s", e.str());
-    exit_vncviewer(_("An unexpected error occurred when communicating "
-                     "with the server:\n\n%s"), e.str());
+    abort_connection_with_unexpected_error(e);
   }
 
   when = FL_READ | FL_EXCEPT;
@@ -288,6 +287,7 @@ void CConn::socketEvent(FL_SOCKET fd, void *data)
   Fl::add_fd(fd, when, socketEvent, data);
 
   recursing = false;
+  Fl::add_fd(fd, FL_READ | FL_EXCEPT, socketEvent, data);
 }
 
 ////////////////////// CConnection callback methods //////////////////////

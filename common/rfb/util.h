@@ -24,10 +24,6 @@
 #ifndef __RFB_UTIL_H__
 #define __RFB_UTIL_H__
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
 #include <limits.h>
 #include <string.h>
 
@@ -52,6 +48,7 @@ namespace rfb {
     CharArray(char* str) : buf(str) {} // note: assumes ownership
     CharArray(size_t len) {
       buf = new char[len]();
+      memset(buf, 0, len);
     }
     ~CharArray() {
       delete [] buf;

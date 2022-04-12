@@ -20,11 +20,17 @@
 // FIXME: Check cases when screen width/height is not a multiply of 32.
 //        e.g. 800x600.
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #include <strings.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
+#include <pwd.h>
+
 #include <rfb/Logger_stdio.h>
 #include <rfb/LogWriter.h>
 #include <rfb/VNCServerST.h>
@@ -50,11 +56,14 @@ using namespace network;
 
 static LogWriter vlog("Main");
 
+static const char* defaultDesktopName();
+
 IntParameter pollingCycle("PollingCycle", "Milliseconds per one polling "
                           "cycle; actual interval may be dynamically "
                           "adjusted to satisfy MaxProcessorUsage setting", 30);
 IntParameter maxProcessorUsage("MaxProcessorUsage", "Maximum percentage of "
                                "CPU time to be consumed", 35);
+StringParameter desktopName("desktop", "Name of VNC desktop", defaultDesktopName());
 StringParameter displayname("display", "The X display", "");
 IntParameter rfbport("rfbport", "TCP port to listen for RFB protocol",5900);
 StringParameter rfbunixpath("rfbunixpath", "Unix socket to listen for RFB protocol", "");
@@ -63,6 +72,35 @@ StringParameter hostsFile("HostsFile", "File with IP access control rules", "");
 BoolParameter localhostOnly("localhost",
                             "Only allow connections from localhost",
                             false);
+StringParameter interface("interface",
+                          "listen on the specified network address",
+                          "all");
+
+static const char* defaultDesktopName()
+{
+  size_t host_max = sysconf(_SC_HOST_NAME_MAX);
+  if (host_max < 0)
+    return "";
+
+  std::vector<char> hostname(host_max + 1);
+  if (gethostname(hostname.data(), hostname.size()) == -1)
+    return "";
+
+  struct passwd* pwent = getpwuid(getuid());
+  if (pwent == NULL)
+    return "";
+
+  size_t len = snprintf(NULL, 0, "%s@%s", pwent->pw_name, hostname.data());
+  if (len < 0)
+    return "";
+
+  char* name = new char[len + 1];
+
+  snprintf(name, len + 1, "%s@%s", pwent->pw_name, hostname.data());
+
+  return name;
+}
+
 
 //
 // Allow the main loop terminate itself gracefully on receiving a signal.
@@ -209,6 +247,11 @@ int main(int argc, char** argv)
 
   Configuration::enableServerParams();
 
+  // FIXME: We don't support clipboard yet
+  Configuration::removeParam("AcceptCutText");
+  Configuration::removeParam("SendCutText");
+  Configuration::removeParam("MaxCutText");
+
   for (int i = 1; i < argc; i++) {
     if (Configuration::setParam(argv[i]))
       continue;
@@ -256,7 +299,7 @@ int main(int argc, char** argv)
     }
     XDesktop desktop(dpy, &geo);
 
-    VNCServerST server("x0vncserver", &desktop);
+    VNCServerST server(desktopName, &desktop);
 
     if (rfbunixpath.getValueStr()[0] != '\0') {
       listeners.push_back(new network::UnixListener(rfbunixpath, rfbunixmode));
@@ -264,11 +307,16 @@ int main(int argc, char** argv)
     }
 
     if ((int)rfbport != -1) {
+      const char *addr = interface;
+      if (strcasecmp(addr, "all") == 0)
+        addr = 0;
       if (localhostOnly)
         createLocalTcpListeners(&listeners, (int)rfbport);
       else
-        createTcpListeners(&listeners, 0, (int)rfbport);
-      vlog.info("Listening on port %d", (int)rfbport);
+        createTcpListeners(&listeners, addr, (int)rfbport);
+      vlog.info("Listening for VNC connections on %s interface(s), port %d",
+                localhostOnly ? "local" : (const char*)interface,
+                (int)rfbport);
     }
 
     const char *hostsData = hostsFile.getData();
