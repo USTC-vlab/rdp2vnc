@@ -3,7 +3,7 @@ include_directories(${CMAKE_SOURCE_DIR}/unix)
 include_directories(${CMAKE_SOURCE_DIR}/common)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(PACKAGES REQUIRED freerdp2 freerdp-client2 winpr2 xkbcommon ncursesw vterm)
+pkg_check_modules(PACKAGES REQUIRED freerdp2 freerdp-client2 winpr2 xkbcommon vterm)
 find_package(utf8cpp REQUIRED)
 add_custom_command(OUTPUT font.o
   COMMAND cd ${CMAKE_CURRENT_SOURCE_DIR} && ld -r -b binary -o ${CMAKE_CURRENT_BINARY_DIR}/font.o font

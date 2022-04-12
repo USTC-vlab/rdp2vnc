@@ -180,8 +180,7 @@ char* programName;
 
 static void printVersion(FILE *fp)
 {
-  fprintf(fp, "TigerVNC Server version %s, built %s\n",
-          PACKAGE_VERSION, buildtime);
+  fprintf(fp, "rdp2vnc 0.1\n");
 }
 
 static void usage()
@@ -325,7 +324,7 @@ int main(int argc, char** argv)
       server.reset(new VNCServerST("rdp2vnc", rdpDesktop.get()));
       rdpClient->setRDPDesktop(rdpDesktop.get());
       listenServer(listeners);
-      rdpClient->startThread();
+      //rdpClient->startThread();
     } catch (rdr::Exception &e) {
       vlog.error("%s", e.str());
       return 1;

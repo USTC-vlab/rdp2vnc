@@ -23,7 +23,7 @@
 
 struct RDPCursor {
   RDPCursor(const uint8_t* data_, size_t size_, int width_, int height_, int x_, int y_)
-    : data(new uint8_t[size_]), size(size_), width(width_), height(height_), x(x_), y(y_), posX(0), posY(0)
+    : data(new uint8_t[size_]), size(size_), width(width_), height(height_), x(x_), y(y_), posX(-1), posY(-1)
   {
     if (data_ && data) {
       memcpy(data, data_, size);

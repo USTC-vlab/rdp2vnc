@@ -313,7 +313,7 @@ bool RDPClient::endPaint() {
   if (gdi->primary->hdc->hwnd->invalid->null) {
     return true;
   }
-  hasChangedSize = false;
+  //hasPendingChangeSize = false;
   int ninvalid = gdi->primary->hdc->hwnd->ninvalid;
   HGDI_RGN cinvalid = gdi->primary->hdc->hwnd->cinvalid;
   for (int i = 0; i < ninvalid; ++i) {
@@ -382,7 +382,7 @@ bool RDPClient::pointerSet(RDPPointerImpl* pointer) {
   int y = pointer->y;
   Point hotspot(x, y);
   lastCursor.reset(new RDPCursor(pointer->buffer, pointer->size, width, height, x, y));
-  if (hasChangedSize) {
+  if (hasPendingChangeSize) {
     hasPendingPointer = true;
   } else {
     if (desktop && desktop->server) {
@@ -405,7 +405,7 @@ bool RDPClient::pointerSetPosition(uint32_t x, uint32_t y) {
     lastCursor->posX = x;
     lastCursor->posY = y;
   }
-  if (hasChangedSize) {
+  if (hasPendingChangeSize) {
     hasPendingPointer = true;
   } else {
     if (desktop && desktop->server) {
@@ -430,7 +430,7 @@ bool RDPClient::desktopResize() {
   if (!desktop->resize()) {
     return false;
   }
-  hasChangedSize = true;
+  hasPendingChangeSize = true;
   lastChangeSizeTime = getMSTimestamp();
   return true;
 }
@@ -625,7 +625,7 @@ RDPClient::RDPClient(int argc_, char** argv_, bool& stopSignal_)
     hasSentCliprdrFormats(false), oldButtonMask(0), cliprdrRequestedFormatId(-1),
     hasCapsLocked(false), hasSyncedCapsLocked(false), hasAnnouncedClipboard(false),
     isClientClipboardAvailable(false), hasClientRequestedClipboard(false), hasReceivedDisplayControlCaps(false),
-    hasChangedSize(false), hasPendingPointer(false)
+    hasPendingChangeSize(false), hasPendingPointer(false)
 {
 }
 
@@ -780,22 +780,30 @@ void RDPClient::eventLoop() {
 }
 
 void RDPClient::sendPendingPointer() {
-  if (lastCursor && desktop && desktop->server) {
-    try {
-      desktop->server->setCursor(lastCursor->width, lastCursor->height,
-        Point(lastCursor->x, lastCursor->y), lastCursor->data);
-    } catch (rdr::Exception& e) {
-      vlog.error("Set cursor: %s", e.str());
-    }
-    if (lastCursor->posX >= 0 && lastCursor->posY >= 0) {
-      try {
-        desktop->server->setCursorPos(Point(lastCursor->posX, lastCursor->posY), false);
-      } catch (rdr::Exception& e) {
-        vlog.error("Set cursor position: %s", e.str());
-      }
+  if (hasPendingChangeSize) {
+    int64_t now = getMSTimestamp();
+    if (now - lastChangeSizeTime > 5000) {
+      hasPendingChangeSize = false;
     }
   }
-  hasPendingPointer = false;
+  if (hasPendingPointer && !hasPendingChangeSize) {
+    if (lastCursor && desktop && desktop->server) {
+      try {
+        desktop->server->setCursor(lastCursor->width, lastCursor->height,
+          Point(lastCursor->x, lastCursor->y), lastCursor->data);
+      } catch (rdr::Exception& e) {
+        vlog.error("Set cursor: %s", e.str());
+      }
+      if (lastCursor->posX >= 0 && lastCursor->posY >= 0) {
+        try {
+          desktop->server->setCursorPos(Point(lastCursor->posX, lastCursor->posY), false);
+        } catch (rdr::Exception& e) {
+          vlog.error("Set cursor position: %s", e.str());
+        }
+      }
+    }
+    hasPendingPointer = false;
+  }
 }
 
 int RDPClient::width() {

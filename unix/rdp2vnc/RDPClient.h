@@ -147,7 +147,7 @@ private:
   bool isClientClipboardAvailable;
   bool hasClientRequestedClipboard;
   bool hasReceivedDisplayControlCaps;
-  bool hasChangedSize;
+  bool hasPendingChangeSize;
   bool hasPendingPointer;
   int maxNumMonitors;
   int maxMonitorAreaFactorA;

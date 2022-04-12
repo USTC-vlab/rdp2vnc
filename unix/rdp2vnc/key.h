@@ -122,7 +122,8 @@ static const std::unordered_map<uint32_t, uint32_t> keysymScancodeMap = {
   {XKB_KEY_KP_Page_Up,    RDP_SCANCODE_PRIOR},
   {XKB_KEY_KP_Page_Down,  RDP_SCANCODE_NEXT},
   {XKB_KEY_KP_Insert,     RDP_SCANCODE_INSERT},
-  {XKB_KEY_KP_Delete,     RDP_SCANCODE_DELETE}
+  {XKB_KEY_KP_Delete,     RDP_SCANCODE_DELETE},
+  {XKB_KEY_space,         RDP_SCANCODE_SPACE}
 };
 
 static const std::unordered_map<uint32_t, int> keysymVTermKeyMap = {

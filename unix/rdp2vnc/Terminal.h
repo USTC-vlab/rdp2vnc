@@ -71,7 +71,7 @@ private:
   rfb::Rect terminalLineToRFBRect(int line);
   rfb::Rect terminalRectToRFBRect(int x1, int x2, int y1, int y2);
   Geometry* geometry;
-  std::unique_ptr<rfb::ManagedPixelBuffer> pb;
+  rfb::ManagedPixelBuffer* pb;
   rfb::VNCServer* server;
   bool running;
   VTerm* vt;

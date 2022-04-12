@@ -58,11 +58,11 @@ using namespace network;
 static rfb::LogWriter vlog("Terminal");
 
 TerminalDesktop::TerminalDesktop(Geometry* geometry_)
-  : geometry(geometry_), server(NULL), running(false), vt(NULL), requestedWidth(-1), requestedHeight(-1),
+  : geometry(geometry_), pb(NULL), server(NULL), running(false), vt(NULL), requestedWidth(-1), requestedHeight(-1),
     defaultFGColor(0x00f8f8f2), defaultBGColor(0x00272822)
 {
   PixelFormat format(32, 24, false, true, 255, 255, 255, 16, 8, 0);
-  pb.reset(new ManagedPixelBuffer(format, geometry->width(), geometry->height()));
+  pb = new ManagedPixelBuffer(format, geometry->width(), geometry->height());
   int stride;
   uint32_t* buffer = (uint32_t *)pb->getBufferRW(geometry->getRect(), &stride);
   int width = geometry->width();
@@ -121,7 +121,7 @@ bool TerminalDesktop::initTerminal(int lines, int cols) {
 
 void TerminalDesktop::start(VNCServer* vs) {
   server = vs;
-  server->setPixelBuffer(pb.get(), computeScreenLayout());
+  server->setPixelBuffer(pb, computeScreenLayout());
   running = true;
 }
 
